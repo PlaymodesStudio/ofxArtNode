@@ -212,7 +212,7 @@ bool ofxArtNode::sendUniCast(int net, int subnet, int universe, char * data, int
 		ArtPollReply & reply = pair.second.pollReply;
 		if (reply.NetSwitch == net && reply.SubSwitch == subnet) {
 			for (int i=0; i<reply.NumPortsLo; i++) {
-				if (reply.PortTypes[i] & PortTypeOutput && reply.getPortProtocol(i) == PortTypeDmx && reply.SwOut[i] == universe) {
+				if (reply.PortTypes[i] & PortTypeOutput && reply.getPortProtocol(i) == PortTypeDmx && reply.SwOut[i]%16 == universe) {
 					sendUniCast(addr.c_str(), reply.BoxAddr.Port != 0 ? reply.BoxAddr.Port : config->udpPort, data, length);
 					ret = true;
 				}
