@@ -2,11 +2,12 @@
 
 #ifdef WIN32
 #include <iphlpapi.h>
+#include <codecvt>
 #else
 #include <ifaddrs.h>
 #endif
 
-void ofxArtNode::setup(string host) {
+void ofxArtNode::setup(string host, string mask) {
     
     vector<string> addr = ofSplitString(host, ".");
     if (addr.size() == 4) {
@@ -21,10 +22,18 @@ void ofxArtNode::setup(string host) {
         config->ip[3] = 255;
     }
 
-	config->mask[0] = 255;
-	config->mask[1] = 0;
-	config->mask[2] = 0;
-	config->mask[3] = 0;
+	vector<string> msk = ofSplitString(mask, ".");
+	if (msk.size() == 4) {
+		for (int i=0; i<4; i++) {
+			config->mask[i] = ofToInt(msk[i]);
+		}
+	}
+	else {
+		config->mask[0] = 255;
+		config->mask[1] = 0;
+		config->mask[2] = 0;
+		config->mask[3] = 0;
+	}
 
 	config->udpPort = DefaultPort;
 
@@ -44,27 +53,34 @@ void ofxArtNode::setup(string host) {
 map<string,string> ofxArtNode::getInterfaces() {
     map<string,string> interfaces;
 #ifdef WIN32
-	PIP_ADAPTER_INFO pAdapterInfo;
-	ULONG ulOutBufLen = sizeof(IP_ADAPTER_INFO);
-	pAdapterInfo = (IP_ADAPTER_INFO *) malloc(ulOutBufLen);
+	ULONG ulOutBufLen = 15*1024;
+	PIP_ADAPTER_ADDRESSES pAddresses = (PIP_ADAPTER_ADDRESSES)HeapAlloc(GetProcessHeap(), 0, ulOutBufLen);
 
-	if (GetAdaptersInfo(pAdapterInfo, &ulOutBufLen) == ERROR_BUFFER_OVERFLOW) {
-		free(pAdapterInfo);
-		pAdapterInfo = (IP_ADAPTER_INFO *) malloc(ulOutBufLen);
-	}
+	DWORD dwRetVal = GetAdaptersAddresses(AF_INET, 0, NULL, pAddresses, &ulOutBufLen);
+	if (dwRetVal == NO_ERROR) {
+		PIP_ADAPTER_ADDRESSES pCurrAddresses = pAddresses;
+		while (pCurrAddresses) {
+			wstring_convert<std::codecvt_utf8<wchar_t>, wchar_t> converter;
+			wstring wname = pCurrAddresses->FriendlyName;
+			string name = converter.to_bytes(wname);
+			string address;
 
-	DWORD dwRetVal = 0;
-	if ((dwRetVal = GetAdaptersInfo(pAdapterInfo, &ulOutBufLen)) == NO_ERROR) {
-		PIP_ADAPTER_INFO pAdapter = pAdapterInfo;
-		while (pAdapter) {
-			string name = pAdapter->AdapterName;
-			string host = pAdapter->IpAddressList.IpAddress.String;
-			interfaces[name] = host;
-			pAdapter = pAdapter->Next;
+			IP_ADAPTER_UNICAST_ADDRESS *pUniAddr = pCurrAddresses->FirstUnicastAddress;
+			while (pUniAddr) {
+				CHAR addrStr[32];
+				DWORD addrStrLen = sizeof(addrStr);
+				INT iRet = WSAAddressToStringA(pUniAddr->Address.lpSockaddr, pUniAddr->Address.iSockaddrLength, NULL, addrStr, &addrStrLen);
+				if (iRet != SOCKET_ERROR) {
+					address = addrStr;
+					break;
+				}
+				pUniAddr = pUniAddr->Next;
+			}
+			interfaces[name] = address;
+			pCurrAddresses = pCurrAddresses->Next;
 		}
 	}
-	
-	free(pAdapterInfo);
+	HeapFree(GetProcessHeap(), 0, pAddresses);
 #else
     struct ifaddrs *ifaddr, *ifa;
     if (getifaddrs(&ifaddr) == -1) {
@@ -115,21 +131,25 @@ void ofxArtNode::update() {
 			string addr;
 			int port;
 			udp.GetRemoteAddr(addr, port);
+            
             NodeEntry ne;
             ne.address = addr;
             ne.timeStamp = now;
             ne.pollReply = *reply;
 			nodes[addr] = ne;
             ofNotifyEvent(pollReplyReceived, ne, this);
-		}
+
+            if (nodes.find(addr) == nodes.end())
+                ofNotifyEvent(nodeAdded, ne, this);
+        }
 	}
     for (auto it=nodes.begin(); it!=nodes.end();) {
         NodeEntry & node = it->second;
         int age = node.timeStamp - lastPollTime;
         if (age > 4000) {
-            ofNotifyEvent(pollReplyErased, node, this);
-            //it = nodes.erase(it);
-            it++;
+            ofNotifyEvent(nodeErased, node, this);
+            it = nodes.erase(it);
+            //it++;
         } else {
             it++;
         }
@@ -180,9 +200,11 @@ void ofxArtNode::sendPoll() {
 	createPoll();
 	sendMultiCast();
     lastPollTime = ofGetSystemTime();
+    pollFrameNum = ofGetFrameNum();
 }
 
 void ofxArtNode::sendDmx(ArtDmx * dmx) {
+	setPacketHeader((unsigned char*)dmx);
     bool nodeFound = sendUniCast(dmx->getNet(), dmx->getSub(), dmx->getUni(), (char*)dmx, dmx->getSize());
     //sendMultiCast((char*)dmx, sizeof(ArtDmx));
 }
@@ -227,6 +249,9 @@ bool ofxArtNode::sendUniCast(int net, int subnet, int universe) {
 }
 
 bool ofxArtNode::sendUniCast(string addr, unsigned short udpPort, char * data, int length) {
+    if (ofGetFrameNum() == pollFrameNum)
+        return false;
+    
     if (!udp.Connect(addr.c_str(), udpPort))
 		return false;
 
