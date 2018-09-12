@@ -136,17 +136,19 @@ void ofxArtNode::update() {
             ne.address = addr;
             ne.timeStamp = now;
             ne.pollReply = *reply;
-			nodes[addr] = ne;
             ofNotifyEvent(pollReplyReceived, ne, this);
-
+            
             if (nodes.find(addr) == nodes.end())
                 ofNotifyEvent(nodeAdded, ne, this);
+            
+            nodes[addr] = ne;
         }
 	}
     for (auto it=nodes.begin(); it!=nodes.end();) {
         NodeEntry & node = it->second;
-        int age = node.timeStamp - lastPollTime;
-        if (age > 4000) {
+        int age = lastPollTime - node.timeStamp;
+        if(age < 0) age = 0;
+        if (age > pollInterval) {
             ofNotifyEvent(nodeErased, node, this);
             it = nodes.erase(it);
             //it++;
