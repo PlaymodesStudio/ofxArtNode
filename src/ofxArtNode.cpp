@@ -157,7 +157,7 @@ void ofxArtNode::update() {
         }
     }
     if (now - lastPollTime > pollInterval) {
-        sendPoll();
+        //sendPoll();
     }
 }
 
